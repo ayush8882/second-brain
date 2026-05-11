@@ -1,0 +1,20 @@
+{
+  "name": "second-brain",
+  "version": "1.0.0",
+  "description": "Ingest anything (notes, docs, URLs, voice). Ask questions. Get answers with sources. Surfaces forgotten knowledge proactively.",
+  "homepage": "https://github.com/ayush8882/second-brain#readme",
+  "bugs": {
+    "url": "https://github.com/ayush8882/second-brain/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ayush8882/second-brain.git"
+  },
+  "license": "ISC",
+  "author": "Ayush Agrawal",
+  "type": "commonjs",
+  "main": "index.js",
+  "scripts": {
+    "test": "node index.js"
+  }
+}
