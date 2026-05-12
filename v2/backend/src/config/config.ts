@@ -1,13 +1,26 @@
+import { join } from 'node:path';
 
+function numEnv(key: string, fallback: number): number {
+  const v = Number.parseFloat(process.env[key] ?? '');
+  return Number.isFinite(v) ? v : fallback;
+}
+
+function intEnv(key: string, fallback: number): number {
+  const v = Number.parseInt(process.env[key] ?? '', 10);
+  return Number.isFinite(v) ? v : fallback;
+}
 
 const voyageFreeTier = process.env.VOYAGE_FREE_TIER !== 'false';
+
+/** Writable uploads directory for PDF multipart ingest (override with INGEST_FILES_ROOT). */
+const defaultIngestRoot = join(process.cwd(), 'data', 'uploads');
 
 export const config = {
   port: Number(process.env.PORT) || 3000,
 
   anthropicKey: process.env.ANTHROPIC_API_KEY,
   voyageKey: process.env.VOYAGE_API_KEY,
-  qdrantUrl: process.env.QDRANT_URL ?? 'http://127.0.0.1:6333',
+  qdrantUrl: process.env.QDRANT_URL ?? 'http://localhost:6333',
   qdrantApiKey: process.env.QDRANT_API_KEY,
 
   models: {
@@ -17,11 +30,13 @@ export const config = {
     voyage: voyageFreeTier ? 'voyage-3-lite' : 'voyage-3',
   },
 
+  /** Mirrors top-level `src/config.js` (CLI). */
   rag: {
     chunkTokens: 400,
     chunkOverlap: 50,
-    topK: 5,
-    scoreThreshold: 0.75,
+    topK: intEnv('RAG_TOP_K', 5),
+    /** Cosine in Qdrant; paraphrased Q↔chunk pairs often sit ~0.35–0.65. */
+    scoreThreshold: numEnv('RAG_SCORE_THRESHOLD', 0.38),
   },
 
   collection: 'second_brain',
@@ -30,7 +45,7 @@ export const config = {
 
   voyageFreeTier,
 
-  /** PDF ingest only allows paths under this directory (set e.g. to your uploads folder). */
-  ingestFilesRoot: process.env.INGEST_FILES_ROOT?.trim() ?? '',
+  /** PDF ingest only allows paths under this directory. */
+  ingestFilesRoot: process.env.INGEST_FILES_ROOT?.trim() || defaultIngestRoot,
   urlFetchTimeoutMs: Number(process.env.URL_FETCH_TIMEOUT_MS) || 30_000,
 };

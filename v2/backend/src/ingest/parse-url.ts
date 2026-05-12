@@ -1,3 +1,5 @@
+import { Readability } from '@mozilla/readability';
+import { JSDOM } from 'jsdom';
 import * as cheerio from 'cheerio';
 import { PDFParse } from 'pdf-parse';
 import { config } from '../config/config';
@@ -7,6 +9,23 @@ function htmlToPlainText(html: string): string {
   $('script, style, noscript, iframe, svg').remove();
   const text = $('body').length ? $('body').text() : $.root().text();
   return text.replace(/\s+/g, ' ').trim();
+}
+
+/** Same extraction idea as top-level `src/parsers/url.js` (Readability + JSDOM). */
+function extractArticleHtml(html: string, pageUrl: string): string | null {
+  try {
+    const dom = new JSDOM(html, { url: pageUrl });
+    const reader = new Readability(dom.window.document);
+    const article = reader.parse();
+    if (!article?.textContent?.trim()) {
+      return null;
+    }
+    const titlePart = article.title?.trim() ?? '';
+    const body = article.textContent.trim();
+    return titlePart ? `${titlePart}\n\n${body}` : body;
+  } catch {
+    return null;
+  }
 }
 
 export async function parseUrl(urlString: string): Promise<string> {
@@ -62,7 +81,12 @@ export async function parseUrl(urlString: string): Promise<string> {
       contentType.includes('text/html') ||
       contentType.includes('application/xhtml')
     ) {
-      return htmlToPlainText(buf.toString('utf8'));
+      const html = buf.toString('utf8');
+      const fromReader = extractArticleHtml(html, urlString);
+      if (fromReader) {
+        return fromReader;
+      }
+      return htmlToPlainText(html);
     }
 
     return buf.toString('utf8').trim();

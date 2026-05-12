@@ -27,18 +27,50 @@ export class VectorService implements OnModuleInit {
     }
   }
 
+  /** Reads vector `size` from Qdrant's single-vector or first named-vector config. */
+  private readDeclaredVectorSize(vectors: unknown): number | null {
+    if (!vectors || typeof vectors !== 'object') {
+      return null;
+    }
+    const obj = vectors as Record<string, unknown>;
+    if (typeof obj.size === 'number') {
+      return obj.size;
+    }
+    for (const val of Object.values(obj)) {
+      if (
+        val &&
+        typeof val === 'object' &&
+        typeof (val as { size?: unknown }).size === 'number'
+      ) {
+        return (val as { size: number }).size;
+      }
+    }
+    return null;
+  }
+
   async ensureCollection() {
     const { collections } = await this.qdrantClient.getCollections();
     const exists = collections.some((c) => c.name === config.collection);
 
-    if (!exists) {
-      await this.qdrantClient.createCollection(config.collection, {
-        vectors: {
-          size: config.vectorSize,
-          distance: 'Cosine',
-        },
-      });
+    if (exists) {
+      const info = await this.qdrantClient.getCollection(config.collection);
+      const declared = this.readDeclaredVectorSize(info.config?.params?.vectors);
+      if (declared != null && declared !== config.vectorSize) {
+        this.logger.warn(
+          `Collection "${config.collection}" uses vector size ${declared}; app config expects ${config.vectorSize} (Voyage model / VOYAGE_FREE_TIER). Deleting and recreating the collection; existing vectors are removed.`,
+        );
+        await this.qdrantClient.deleteCollection(config.collection);
+      } else {
+        return;
+      }
     }
+
+    await this.qdrantClient.createCollection(config.collection, {
+      vectors: {
+        size: config.vectorSize,
+        distance: 'Cosine',
+      },
+    });
   }
 
   private async ensureCollectionReady(): Promise<void> {

@@ -22,9 +22,23 @@ CREATE TABLE IF NOT EXISTS notes (
 );
 `);
 
+/** Align with top-level `src/db.js` notes table (raw_text, tags). */
+function migrateNotesColumns(): void {
+  const cols = db.prepare(`PRAGMA table_info(notes)`).all() as { name: string }[];
+  const names = new Set(cols.map((c) => c.name));
+  if (!names.has('raw_text')) {
+    db.exec(`ALTER TABLE notes ADD COLUMN raw_text TEXT NOT NULL DEFAULT ''`);
+  }
+  if (!names.has('tags')) {
+    db.exec(`ALTER TABLE notes ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'`);
+  }
+}
+
+migrateNotesColumns();
+
 const insertNote = db.prepare(
-  `INSERT OR REPLACE INTO notes (id, title, source_type, source_ref, chunk_count, created_at)
-   VALUES (?, ?, ?, ?, ?, datetime('now'))`,
+  `INSERT OR REPLACE INTO notes (id, title, source_type, source_ref, raw_text, tags, chunk_count, created_at)
+   VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
 );
 
 const selectAllNotes = db.prepare(
@@ -52,8 +66,10 @@ export function insertNoteRow(
   sourceType: string,
   sourceRef: string,
   chunkCount: number,
+  rawText: string,
+  tagsJson: string,
 ): void {
-  insertNote.run(id, title, sourceType, sourceRef, chunkCount);
+  insertNote.run(id, title, sourceType, sourceRef, rawText, tagsJson, chunkCount);
 }
 
 export function getAllNotes(): NoteRow[] {
