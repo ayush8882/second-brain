@@ -3,6 +3,9 @@
 /node_modules
 /build
 
+# Local SQLite (see src/db/index.ts)
+/data
+
 # Logs
 logs
 *.log

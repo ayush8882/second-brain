@@ -1,40 +1,60 @@
 import { config } from '../config/config';
 
-/** Rough token→char estimate for English-ish text without a tokenizer. */
-const CHARS_PER_TOKEN = 4;
+/** Mirrors `src/chunker.js` sentence-based chunking + overlap. */
+
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+function splitSentences(text: string): string[] {
+  return text
+    .split(/(?<=[.!?])\s+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 20);
+}
 
 export type TextChunk = { index: number; text: string };
 
-export function chunkText(fullText: string): TextChunk[] {
-  const trimmed = fullText.trim();
+export function chunkText(text: string): TextChunk[] {
+  const trimmed = text.trim();
   if (!trimmed) {
     return [];
   }
 
-  const maxChars = Math.max(
-    64,
-    Math.floor(config.rag.chunkTokens * CHARS_PER_TOKEN),
-  );
-  const overlapChars = Math.min(
-    maxChars - 1,
-    Math.floor(config.rag.chunkOverlap * CHARS_PER_TOKEN),
-  );
-
+  const sentences = splitSentences(trimmed);
   const chunks: TextChunk[] = [];
-  let start = 0;
+  let current: string[] = [];
+  let currentTokens = 0;
   let index = 0;
 
-  while (start < trimmed.length) {
-    const end = Math.min(trimmed.length, start + maxChars);
-    const slice = trimmed.slice(start, end).trim();
-    if (slice.length > 0) {
-      chunks.push({ index, text: slice });
-      index += 1;
+  for (const sentence of sentences) {
+    const tokens = estimateTokens(sentence);
+
+    if (
+      currentTokens + tokens > config.rag.chunkTokens &&
+      current.length > 0
+    ) {
+      chunks.push({ text: current.join(' '), index: index++ });
+
+      const overlap: string[] = [];
+      let overlapTokens = 0;
+      for (let i = current.length - 1; i >= 0; i--) {
+        const t = estimateTokens(current[i] ?? '');
+        if (overlapTokens + t > config.rag.chunkOverlap) break;
+        overlap.unshift(current[i] ?? '');
+        overlapTokens += t;
+      }
+
+      current = overlap;
+      currentTokens = overlapTokens;
     }
-    if (end >= trimmed.length) {
-      break;
-    }
-    start = Math.max(end - overlapChars, start + 1);
+
+    current.push(sentence);
+    currentTokens += tokens;
+  }
+
+  if (current.length > 0) {
+    chunks.push({ text: current.join(' '), index: index });
   }
 
   return chunks;
