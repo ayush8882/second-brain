@@ -13,3 +13,5 @@ export type UpsertVectorPoint = {
   vector: number[];
   payload: ChunkPayload;
 };
+
+export type VectorSearchHit = ChunkPayload & { score: number };

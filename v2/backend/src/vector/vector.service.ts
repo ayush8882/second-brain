@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { QdrantClient } from '@qdrant/js-client-rest';
 import { config } from '../config/config';
-import type { UpsertVectorPoint } from './vector.types';
+import type { ChunkPayload, UpsertVectorPoint, VectorSearchHit } from './vector.types';
 
 @Injectable()
 export class VectorService implements OnModuleInit {
@@ -70,7 +70,10 @@ export class VectorService implements OnModuleInit {
     });
   }
 
-  async search(query: { vector: number[] }, topK: number = config.rag.topK) {
+  async search(
+    query: { vector: number[] },
+    topK: number = config.rag.topK,
+  ): Promise<VectorSearchHit[]> {
     await this.ensureCollectionReady();
     const results = await this.qdrantClient.search(config.collection, {
       vector: query.vector,
@@ -78,7 +81,12 @@ export class VectorService implements OnModuleInit {
       with_payload: true,
       score_threshold: config.rag.scoreThreshold,
     });
-    return results.map((r) => r.payload);
+    return results
+      .filter((r) => r.payload != null)
+      .map((r) => ({
+        ...(r.payload as ChunkPayload),
+        score: r.score,
+      }));
   }
 
   async deleteNoteChunks(noteId: string) {

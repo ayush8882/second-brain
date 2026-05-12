@@ -10,6 +10,7 @@ import { config } from '../config/config';
 import { chunkText } from './chunk-text';
 import { parsePdf } from './parse-pdf';
 import { parseUrl } from './parse-url';
+import { insertNoteRow } from '../db';
 import { VectorService } from '../vector/vector.service';
 import type { UpsertVectorPoint } from '../vector/vector.types';
 
@@ -134,6 +135,8 @@ export class IngestService {
     });
 
     await this.vectorService.upsertChunks(points);
+
+    insertNoteRow(noteId, title, sourceType, sourceRef, chunks.length);
 
     return { noteId, chunkCount: chunks.length, title };
   }
