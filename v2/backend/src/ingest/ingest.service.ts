@@ -1,12 +1,14 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   ServiceUnavailableException,
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { VoyageAIClient } from 'voyageai';
 import { v4 as uuid } from 'uuid';
 import { config } from '../config/config';
+import { voyageEmbedBatch } from '../embed/voyage-embed.util';
 import { chunkText } from './chunk-text';
 import { parsePdf } from './parse-pdf';
 import { parseUrl } from './parse-url';
@@ -14,10 +16,9 @@ import { insertNoteRow } from '../db';
 import { VectorService } from '../vector/vector.service';
 import type { UpsertVectorPoint } from '../vector/vector.types';
 
-const VOYAGE_EMBED_BATCH = 128;
-
 @Injectable()
 export class IngestService {
+  private readonly logger = new Logger(IngestService.name);
   private readonly voyage: VoyageAIClient | null;
 
   constructor(private readonly vectorService: VectorService) {
@@ -89,6 +90,9 @@ export class IngestService {
     throw new UnprocessableEntityException(msg);
   }
 
+  /**
+   * Same pipeline as top-level `src/ingest.js`: extract → chunk → embed batch → Qdrant → SQLite.
+   */
   private async processAndStore(
     title: string,
     text: string,
@@ -104,13 +108,19 @@ export class IngestService {
 
     const noteId = uuid();
     const tagsJson = JSON.stringify(tags);
-    const chunks = chunkText(text);
+    const rawText = text.trim();
+    const chunks = chunkText(rawText);
 
     if (chunks.length === 0) {
+      insertNoteRow(noteId, title, sourceType, sourceRef, 0, rawText, tagsJson);
       return { noteId, chunkCount: 0, title };
     }
 
-    const embeddings = await this.embedDocuments(chunks.map((c) => c.text));
+    const client = this.voyage;
+    const texts = chunks.map((c) => c.text);
+    const embeddings = await voyageEmbedBatch(client, texts, (m) =>
+      this.logger.log(m),
+    );
 
     const points: UpsertVectorPoint[] = chunks.map((c, i) => {
       const vector = embeddings[i];
@@ -136,38 +146,16 @@ export class IngestService {
 
     await this.vectorService.upsertChunks(points);
 
-    insertNoteRow(noteId, title, sourceType, sourceRef, chunks.length);
+    insertNoteRow(
+      noteId,
+      title,
+      sourceType,
+      sourceRef,
+      chunks.length,
+      rawText,
+      tagsJson,
+    );
 
     return { noteId, chunkCount: chunks.length, title };
-  }
-
-  private async embedDocuments(texts: string[]): Promise<number[][]> {
-    const client = this.voyage;
-    if (!client) {
-      throw new ServiceUnavailableException(
-        'VOYAGE_API_KEY is not set; cannot embed chunks.',
-      );
-    }
-
-    const out: number[][] = [];
-    for (let i = 0; i < texts.length; i += VOYAGE_EMBED_BATCH) {
-      const batch = texts.slice(i, i + VOYAGE_EMBED_BATCH);
-      const res = await client.embed({
-        input: batch,
-        model: config.models.voyage,
-        inputType: 'document',
-      });
-      const data = res.data ?? [];
-      for (let j = 0; j < batch.length; j++) {
-        const emb = data[j]?.embedding;
-        if (!emb?.length) {
-          throw new ServiceUnavailableException(
-            'Voyage returned no embedding for one or more inputs.',
-          );
-        }
-        out.push(emb);
-      }
-    }
-    return out;
   }
 }
