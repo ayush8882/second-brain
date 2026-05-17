@@ -91,6 +91,29 @@ export const api = {
     }>;
   },
 
+  /** Multipart field name must be `audio` (matches backend FileInterceptor). */
+  ingestVoice: async (audioBlob: Blob, title?: string) => {
+    const form = new FormData();
+    const name =
+      audioBlob instanceof File && audioBlob.name
+        ? audioBlob.name
+        : "recording.webm";
+    form.append("audio", audioBlob, name);
+    if (title?.trim()) {
+      form.append("title", title.trim());
+    }
+    const res = await fetch(`${BASE}/ingest/voice`, {
+      method: "POST",
+      body: form,
+    });
+    await ensureOk(res);
+    return res.json() as Promise<{
+      noteId: string;
+      chunkCount: number;
+      title: string;
+    }>;
+  },
+
   /** SSE: GET /api/chat/ask — use when consuming with EventSource. */
   askStream: (sessionId: string, question: string): EventSource => {
     const params = new URLSearchParams({

@@ -15,6 +15,9 @@ import { parseUrl } from './parse-url';
 import { insertNoteRow } from '../db';
 import { VectorService } from '../vector/vector.service';
 import type { UpsertVectorPoint } from '../vector/vector.types';
+import { createReadStream } from 'node:fs';
+import Anthropic from '@anthropic-ai/sdk';
+import { DeepgramClient } from '@deepgram/sdk';
 
 @Injectable()
 export class IngestService {
@@ -75,6 +78,30 @@ export class IngestService {
         text,
         'url',
         url.trim(),
+        tags ?? [],
+      );
+    } catch (e) {
+      this.rethrowIngestError(e);
+    }
+  }
+
+  async ingestVoice(filePath: string, title?: string, tags?: string[]) {
+    if (!filePath?.trim()) {
+      throw new BadRequestException('filePath is required');
+    }
+    try {
+      const text = await this.transcribeVoice(filePath.trim());
+      let noteTitle = title?.trim() ?? '';
+      if (!noteTitle) {
+        noteTitle = config.anthropicKey
+          ? await this.generateTitle(text)
+          : text.trim().slice(0, 80) || 'Voice note';
+      }
+      return this.processAndStore(
+        noteTitle,
+        text,
+        'voice',
+        filePath.trim(),
         tags ?? [],
       );
     } catch (e) {
@@ -157,5 +184,55 @@ export class IngestService {
     );
 
     return { noteId, chunkCount: chunks.length, title };
+  }
+
+  private async transcribeVoice(filePath: string): Promise<string> {
+    if (!config.deepgramApiKey) {
+      throw new ServiceUnavailableException(
+        'DEEPGRAM_API_KEY is not set; cannot transcribe voice.',
+      );
+    }
+    const deepgram = new DeepgramClient({ apiKey: config.deepgramApiKey });
+    const result = await deepgram.listen.v1.media.transcribeFile(
+      createReadStream(filePath),
+      { model: 'nova-2', smart_format: true, language: 'en-IN' },
+    );
+    if (!('results' in result) || !result.results?.channels?.length) {
+      throw new UnprocessableEntityException(
+        'Transcription returned no results; check audio format or try again.',
+      );
+    }
+    const alt = result.results.channels[0]?.alternatives?.[0];
+    const transcript = alt?.transcript?.trim() ?? '';
+    if (!transcript) {
+      throw new UnprocessableEntityException(
+        'Transcription was empty; audio may be silent or unreadable.',
+      );
+    }
+    return transcript;
+  }
+
+  private async generateTitle(transcript: string): Promise<string> {
+    if (!config.anthropicKey) {
+      throw new ServiceUnavailableException(
+        'ANTHROPIC_API_KEY is not set; cannot generate title.',
+      );
+    }
+    const claude = new Anthropic({ apiKey: config.anthropicKey });
+    const res = await claude.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 20,
+      temperature: 0,
+      system:
+        'Generate a short 4-6 word title for this voice note. Output the title only. No quotes.',
+      messages: [{ role: 'user', content: transcript.slice(0, 300) }],
+    });
+    const block = res.content[0];
+    if (block?.type !== 'text') {
+      throw new UnprocessableEntityException(
+        'Could not generate a title from the transcript.',
+      );
+    }
+    return block.text.trim();
   }
 }
