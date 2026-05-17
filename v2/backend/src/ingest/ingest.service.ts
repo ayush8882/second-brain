@@ -18,13 +18,17 @@ import type { UpsertVectorPoint } from '../vector/vector.types';
 import { createReadStream } from 'node:fs';
 import Anthropic from '@anthropic-ai/sdk';
 import { DeepgramClient } from '@deepgram/sdk';
+import { ConnectionAgent } from 'src/agents/connection.agent';
 
 @Injectable()
 export class IngestService {
   private readonly logger = new Logger(IngestService.name);
   private readonly voyage: VoyageAIClient | null;
 
-  constructor(private readonly vectorService: VectorService) {
+  constructor(
+    private readonly vectorService: VectorService,
+    private readonly connectionsAgent: ConnectionAgent,
+  ) {
     this.voyage = config.voyageKey
       ? new VoyageAIClient({ apiKey: config.voyageKey })
       : null;
@@ -182,6 +186,17 @@ export class IngestService {
       rawText,
       tagsJson,
     );
+
+    // ── Trigger connections agent — non-blocking ──────────────
+    // Use the first chunk's vector as representative of the note
+    // Don't await — let it run in background, never block the response
+    if (embeddings.length > 0) {
+      this.connectionsAgent
+        .run(noteId, embeddings[0]!)
+        .catch((err) =>
+          console.error('Connections agent failed silently:', err),
+        );
+    }
 
     return { noteId, chunkCount: chunks.length, title };
   }

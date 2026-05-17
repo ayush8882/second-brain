@@ -6,7 +6,11 @@ import {
 } from '@nestjs/common';
 import { QdrantClient } from '@qdrant/js-client-rest';
 import { config } from '../config/config';
-import type { ChunkPayload, UpsertVectorPoint, VectorSearchHit } from './vector.types';
+import type {
+  ChunkPayload,
+  UpsertVectorPoint,
+  VectorSearchHit,
+} from './vector.types';
 
 @Injectable()
 export class VectorService implements OnModuleInit {
@@ -54,13 +58,16 @@ export class VectorService implements OnModuleInit {
 
     if (exists) {
       const info = await this.qdrantClient.getCollection(config.collection);
-      const declared = this.readDeclaredVectorSize(info.config?.params?.vectors);
+      const declared = this.readDeclaredVectorSize(
+        info.config?.params?.vectors,
+      );
       if (declared != null && declared !== config.vectorSize) {
         this.logger.warn(
           `Collection "${config.collection}" uses vector size ${declared}; app config expects ${config.vectorSize} (Voyage model / VOYAGE_FREE_TIER). Deleting and recreating the collection; existing vectors are removed.`,
         );
         await this.qdrantClient.deleteCollection(config.collection);
       } else {
+        await this.ensureNoteIdPayloadIndex();
         return;
       }
     }
@@ -71,6 +78,26 @@ export class VectorService implements OnModuleInit {
         distance: 'Cosine',
       },
     });
+    await this.ensureNoteIdPayloadIndex();
+  }
+
+  /** Required for filter/must_not on `noteId` (connections agent, note delete). */
+  private async ensureNoteIdPayloadIndex(): Promise<void> {
+    try {
+      await this.qdrantClient.createPayloadIndex(config.collection, {
+        field_name: 'noteId',
+        field_schema: 'keyword',
+      });
+      this.logger.log(`Payload index created on "${config.collection}.noteId"`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/already exists|AlreadyExists/i.test(msg)) {
+        return;
+      }
+      this.logger.warn(
+        `Could not create noteId payload index (filters may fail): ${msg}`,
+      );
+    }
   }
 
   private async ensureCollectionReady(): Promise<void> {
@@ -128,5 +155,30 @@ export class VectorService implements OnModuleInit {
         must: [{ key: 'noteId', match: { value: noteId } }],
       },
     });
+  }
+
+  /** Similarity search for connection discovery; excludes the source note's chunks. */
+  async searchExcluding(
+    queryVector: number[],
+    excludeNoteId: string,
+    topK = 8,
+  ): Promise<VectorSearchHit[]> {
+    await this.ensureCollectionReady();
+    const results = await this.qdrantClient.search(config.collection, {
+      vector: queryVector,
+      limit: topK,
+      with_payload: true,
+      score_threshold: config.rag.scoreThreshold,
+      filter: {
+        must_not: [{ key: 'noteId', match: { value: excludeNoteId } }],
+      },
+    });
+
+    return results
+      .filter((r) => r.payload != null)
+      .map((r) => ({
+        ...(r.payload as ChunkPayload),
+        score: r.score,
+      }));
   }
 }

@@ -47,6 +47,37 @@ export const api = {
     return res.json() as Promise<{ deleted: boolean }>;
   },
 
+  getConnections: async (noteId: string) => {
+    const res = await fetch(
+      `${BASE}/notes/${encodeURIComponent(noteId)}/connections`,
+    );
+    await ensureOk(res);
+    return res.json() as Promise<
+      | { found: false }
+      | {
+          found: true;
+          insight: string;
+          relatedIds: string[];
+          createdAt: string;
+        }
+    >;
+  },
+
+  getRecentConnections: async () => {
+    const res = await fetch(`${BASE}/notes/connections/recent`);
+    await ensureOk(res);
+    return res.json() as Promise<
+      {
+        id: string;
+        noteId: string;
+        noteTitle: string;
+        insight: string;
+        relatedIds: string[];
+        createdAt: string;
+      }[]
+    >;
+  },
+
   ingestText: async (title: string, text: string) => {
     const res = await fetch(`${BASE}/ingest/text`, {
       method: "POST",

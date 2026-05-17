@@ -15,6 +15,16 @@ export class NotesController {
     return this.notes.getStats();
   }
 
+  @Get('connections/recent')
+  getRecentConnections() {
+    return this.notes.getRecentConnections();
+  }
+
+  @Get(':id/connections')
+  getConnections(@Param('id') id: string) {
+    return this.notes.getConnections(id);
+  }
+
   @Delete(':id')
   async delete(@Param('id') id: string) {
     return this.notes.delete(id);

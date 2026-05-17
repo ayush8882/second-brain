@@ -4,6 +4,9 @@ import { api } from "../api/client";
 type Page = "dashboard" | "chat" | "ingest" | "notes";
 
 type NoteRow = Awaited<ReturnType<typeof api.getNotes>>[number];
+type RecentConnection = Awaited<
+  ReturnType<typeof api.getRecentConnections>
+>[number];
 
 export default function Dashboard({
   onNavigate,
@@ -12,6 +15,7 @@ export default function Dashboard({
 }) {
   const [stats, setStats] = useState({ total: 0 });
   const [notes, setNotes] = useState<NoteRow[]>([]);
+  const [connections, setConnections] = useState<RecentConnection[]>([]);
 
   useEffect(() => {
     api
@@ -22,6 +26,10 @@ export default function Dashboard({
       .getNotes()
       .then((n) => setNotes(n.slice(0, 5)))
       .catch(() => setNotes([]));
+    api
+      .getRecentConnections()
+      .then(setConnections)
+      .catch(() => setConnections([]));
   }, []);
 
   const sourceIcon: Record<string, string> = {
@@ -103,6 +111,30 @@ export default function Dashboard({
             </span>
           </div>
         ))
+      )}
+
+      {connections.length > 0 && (
+        <div className="mt-8">
+          <div className="text-[10px] font-medium text-[#555] uppercase tracking-wider mb-3">
+            🔗 Recent connections found
+          </div>
+          {connections.map((c) => (
+            <div
+              key={c.id}
+              className="p-3 bg-[#161616] border border-[#1E1E2E] rounded-lg mb-2"
+            >
+              <div className="text-[10px] text-[#8B7CF6] mb-1 font-medium">
+                "{c.noteTitle}"
+              </div>
+              <div className="text-xs text-[#999] leading-relaxed">
+                {c.insight}
+              </div>
+              <div className="text-[9px] text-[#444] mt-1">
+                {formatDate(c.createdAt)}
+              </div>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );
