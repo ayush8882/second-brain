@@ -47,6 +47,37 @@ export const api = {
     return res.json() as Promise<{ deleted: boolean }>;
   },
 
+  getConnections: async (noteId: string) => {
+    const res = await fetch(
+      `${BASE}/notes/${encodeURIComponent(noteId)}/connections`,
+    );
+    await ensureOk(res);
+    return res.json() as Promise<
+      | { found: false }
+      | {
+          found: true;
+          insight: string;
+          relatedIds: string[];
+          createdAt: string;
+        }
+    >;
+  },
+
+  getRecentConnections: async () => {
+    const res = await fetch(`${BASE}/notes/connections/recent`);
+    await ensureOk(res);
+    return res.json() as Promise<
+      {
+        id: string;
+        noteId: string;
+        noteTitle: string;
+        insight: string;
+        relatedIds: string[];
+        createdAt: string;
+      }[]
+    >;
+  },
+
   ingestText: async (title: string, text: string) => {
     const res = await fetch(`${BASE}/ingest/text`, {
       method: "POST",
@@ -80,6 +111,29 @@ export const api = {
     form.append("file", file);
     form.append("title", title);
     const res = await fetch(`${BASE}/ingest/pdf`, {
+      method: "POST",
+      body: form,
+    });
+    await ensureOk(res);
+    return res.json() as Promise<{
+      noteId: string;
+      chunkCount: number;
+      title: string;
+    }>;
+  },
+
+  /** Multipart field name must be `audio` (matches backend FileInterceptor). */
+  ingestVoice: async (audioBlob: Blob, title?: string) => {
+    const form = new FormData();
+    const name =
+      audioBlob instanceof File && audioBlob.name
+        ? audioBlob.name
+        : "recording.webm";
+    form.append("audio", audioBlob, name);
+    if (title?.trim()) {
+      form.append("title", title.trim());
+    }
+    const res = await fetch(`${BASE}/ingest/voice`, {
       method: "POST",
       body: form,
     });

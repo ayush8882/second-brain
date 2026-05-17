@@ -48,4 +48,6 @@ export const config = {
   /** PDF ingest only allows paths under this directory. */
   ingestFilesRoot: process.env.INGEST_FILES_ROOT?.trim() || defaultIngestRoot,
   urlFetchTimeoutMs: Number(process.env.URL_FETCH_TIMEOUT_MS) || 30_000,
+
+  deepgramApiKey: process.env.DEEPGRAM_API_KEY ?? '',
 };

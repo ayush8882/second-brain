@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  HttpCode,
   Post,
   UploadedFile,
   UseInterceptors,
@@ -73,5 +74,39 @@ export class IngestController {
     @Body() body: { title: string; url: string; tags?: string[] },
   ) {
     return this.ingestService.ingestUrl(body.title, body.url, body.tags);
+  }
+
+  @Post('voice')
+  @HttpCode(200)
+  @UseInterceptors(
+    FileInterceptor('audio', {
+      storage: diskStorage({
+        destination: (_req, _file, cb) => {
+          const dir = config.ingestFilesRoot;
+          mkdirSync(dir, { recursive: true });
+          cb(null, dir);
+        },
+        filename: (_req, file, cb) => {
+          const ext =
+            file.originalname?.split('.').pop()?.toLowerCase() ||
+            (file.mimetype?.includes('webm') ? 'webm' : 'bin');
+          cb(null, `voice-${uuid()}.${ext}`);
+        },
+      }),
+      limits: { fileSize: 25 * 1024 * 1024 },
+    }),
+  )
+  async ingestVoice(
+    @UploadedFile() file: Express.Multer.File | undefined,
+    @Body('title') title?: string,
+  ) {
+    if (!file?.path) {
+      throw new BadRequestException('audio file is required');
+    }
+    try {
+      return await this.ingestService.ingestVoice(file.path, title);
+    } finally {
+      await unlink(file.path).catch(() => undefined);
+    }
   }
 }
