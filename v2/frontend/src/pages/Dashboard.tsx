@@ -37,6 +37,7 @@ export default function Dashboard({
     pdf: "📄",
     url: "🔗",
     voice: "🎙️",
+    image: "🖼️",
   };
 
   const formatDate = (createdAt: string) => {

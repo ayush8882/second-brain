@@ -76,6 +76,21 @@ export class IngestController {
     return this.ingestService.ingestUrl(body.title, body.url, body.tags);
   }
 
+  @Post('images')
+  async ingestImages(
+    @Body()
+    body: {
+      title?: string;
+      images: string[];
+      tags?: string[];
+    },
+  ) {
+    if (!body.images?.length) {
+      throw new BadRequestException('images array is required');
+    }
+    return this.ingestService.ingestImages(body);
+  }
+
   @Post('voice')
   @HttpCode(200)
   @UseInterceptors(

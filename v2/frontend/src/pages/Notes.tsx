@@ -27,6 +27,7 @@ export default function Notes() {
     pdf: "📄",
     url: "🔗",
     voice: "🎙️",
+    image: "🖼️",
   };
 
   const filtered = notes.filter((n) =>

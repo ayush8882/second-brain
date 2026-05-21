@@ -1,7 +1,27 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 
-type Tab = "text" | "pdf" | "url" | "voice";
+type Tab = "text" | "pdf" | "url" | "voice" | "image";
+
+const MAX_IMAGES = 10;
+
+type ImageUpload = {
+  id: string;
+  file: File;
+  preview: string;
+};
+
+function fileToDataUri(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") resolve(reader.result);
+      else reject(new Error("Failed to read image"));
+    };
+    reader.onerror = () => reject(new Error("Failed to read image"));
+    reader.readAsDataURL(file);
+  });
+}
 
 function pickRecorderMime(): string | undefined {
   const candidates = [
@@ -120,17 +140,81 @@ export default function Ingest() {
   const [text, setText] = useState("");
   const [url, setUrl] = useState("");
   const [file, setFile] = useState<File | null>(null);
+  const [imageUploads, setImageUploads] = useState<ImageUpload[]>([]);
+  const [imageUrlText, setImageUrlText] = useState("");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<string | null>(null);
 
   const isVoiceTab = tab === "voice";
+  const isImageTab = tab === "image";
+  const imageUploadsRef = useRef(imageUploads);
+  imageUploadsRef.current = imageUploads;
+
+  useEffect(() => {
+    return () => {
+      imageUploadsRef.current.forEach((u) =>
+        URL.revokeObjectURL(u.preview),
+      );
+    };
+  }, []);
+
+  function clearImages() {
+    imageUploads.forEach((u) => URL.revokeObjectURL(u.preview));
+    setImageUploads([]);
+    setImageUrlText("");
+  }
+
+  function addImageFiles(fileList: FileList | null) {
+    if (!fileList?.length) return;
+    const incoming = Array.from(fileList).filter((f) =>
+      f.type.startsWith("image/"),
+    );
+    if (incoming.length === 0) {
+      setResult("Please choose JPEG, PNG, GIF, or WebP images.");
+      return;
+    }
+    setImageUploads((prev) => {
+      const room = MAX_IMAGES - prev.length;
+      const slice = incoming.slice(0, room);
+      if (slice.length < incoming.length) {
+        setResult(`Only ${MAX_IMAGES} images per note (max reached).`);
+      }
+      return [
+        ...prev,
+        ...slice.map((file) => ({
+          id: crypto.randomUUID(),
+          file,
+          preview: URL.createObjectURL(file),
+        })),
+      ];
+    });
+  }
+
+  function removeImageUpload(id: string) {
+    setImageUploads((prev) => {
+      const item = prev.find((u) => u.id === id);
+      if (item) URL.revokeObjectURL(item.preview);
+      return prev.filter((u) => u.id !== id);
+    });
+  }
+
+  async function collectImagePayload(): Promise<string[]> {
+    const fromText = imageUrlText
+      .split("\n")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const fromFiles = await Promise.all(
+      imageUploads.map((u) => fileToDataUri(u.file)),
+    );
+    return [...fromFiles, ...fromText];
+  }
 
   async function handleSubmit() {
     if (isVoiceTab) {
       setResult("Use the recorder — the note is saved when you stop recording.");
       return;
     }
-    if (!title.trim()) {
+    if (!isImageTab && !title.trim()) {
       setResult("Please enter a title.");
       return;
     }
@@ -154,6 +238,23 @@ export default function Ingest() {
           }
           res = await api.ingestPdf(title, file);
           break;
+        case "image": {
+          const images = await collectImagePayload();
+          if (images.length === 0) {
+            setResult("Add at least one image (upload or URL per line).");
+            setLoading(false);
+            return;
+          }
+          if (images.length > MAX_IMAGES) {
+            setResult(`At most ${MAX_IMAGES} images per note.`);
+            setLoading(false);
+            return;
+          }
+          res = await api.ingestImages(images, {
+            title: title.trim() || undefined,
+          });
+          break;
+        }
         default:
           setLoading(false);
           return;
@@ -163,6 +264,7 @@ export default function Ingest() {
       setText("");
       setUrl("");
       setFile(null);
+      clearImages();
     } catch (e: unknown) {
       setResult(`Error: ${e instanceof Error ? e.message : "Request failed"}`);
     }
@@ -192,8 +294,13 @@ export default function Ingest() {
     { id: "text", label: "📝 Text" },
     { id: "pdf", label: "📄 PDF" },
     { id: "url", label: "🔗 URL" },
+    { id: "image", label: "🖼️ Image" },
     { id: "voice", label: "🎤 Voice" },
   ];
+
+  const imageCount =
+    imageUploads.length +
+    imageUrlText.split("\n").filter((s) => s.trim()).length;
 
   return (
     <div className="p-6 max-w-2xl">
@@ -203,7 +310,7 @@ export default function Ingest() {
       </div>
 
       {/* Tab selector */}
-      <div className="flex gap-1 bg-[#161616] rounded-lg p-1 border border-[#222] mb-5 w-fit">
+      <div className="flex flex-wrap gap-1 bg-[#161616] rounded-lg p-1 border border-[#222] mb-5 w-fit max-w-full">
         {tabs.map((t) => (
           <button
             key={t.id}
@@ -224,7 +331,9 @@ export default function Ingest() {
         placeholder={
           isVoiceTab
             ? "Optional title — generated from audio if empty"
-            : "Title for this note..."
+            : isImageTab
+              ? "Optional title — generated from image description if empty"
+              : "Title for this note..."
         }
         className="w-full bg-[#161616] border border-[#222] rounded-lg px-3 py-2 text-sm text-[#ccc] outline-none placeholder-[#444] focus:border-[#8B7CF6] mb-3"
       />
@@ -268,6 +377,83 @@ export default function Ingest() {
         </div>
       )}
 
+      {tab === "image" && (
+        <div className="space-y-4">
+          <p className="text-xs text-[#666]">
+            Upload files or paste public image URLs (one per line). The server
+            describes each image in detail, then stores it like any other note.
+          </p>
+
+          <div
+            className="border border-dashed border-[#333] rounded-lg p-6 text-center cursor-pointer hover:border-[#8B7CF6] transition-colors"
+            onClick={() => document.getElementById("image-input")?.click()}
+          >
+            <div className="text-2xl mb-2">🖼️</div>
+            <div className="text-xs text-[#555]">
+              Click to upload images (max {MAX_IMAGES})
+            </div>
+            <div className="text-[10px] text-[#444] mt-1">
+              JPEG, PNG, GIF, WebP
+            </div>
+            <input
+              id="image-input"
+              type="file"
+              accept="image/jpeg,image/png,image/gif,image/webp"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                addImageFiles(e.target.files);
+                e.target.value = "";
+              }}
+            />
+          </div>
+
+          {imageUploads.length > 0 && (
+            <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+              {imageUploads.map((u) => (
+                <div
+                  key={u.id}
+                  className="relative aspect-square rounded-lg overflow-hidden border border-[#333] bg-[#161616]"
+                >
+                  <img
+                    src={u.preview}
+                    alt={u.file.name}
+                    className="w-full h-full object-cover"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeImageUpload(u.id)}
+                    className="absolute top-1 right-1 w-5 h-5 rounded-full bg-black/70 text-[#ccc] text-xs hover:bg-red-600 hover:text-white"
+                    aria-label={`Remove ${u.file.name}`}
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div>
+            <div className="text-[10px] text-[#555] mb-1.5 uppercase tracking-wider">
+              Or image URLs / base64 (one per line)
+            </div>
+            <textarea
+              value={imageUrlText}
+              onChange={(e) => setImageUrlText(e.target.value)}
+              placeholder={`https://example.com/photo.jpg\nhttps://...`}
+              rows={4}
+              className="w-full bg-[#161616] border border-[#222] rounded-lg px-3 py-2 text-sm text-[#ccc] outline-none resize-none placeholder-[#444] focus:border-[#8B7CF6] font-mono text-xs"
+            />
+          </div>
+
+          {imageCount > 0 && (
+            <p className="text-[10px] text-[#8B7CF6]">
+              {imageCount} image{imageCount === 1 ? "" : "s"} ready to ingest
+            </p>
+          )}
+        </div>
+      )}
+
       {tab === "voice" && (
         <>
           <p className="text-xs text-[#666] mb-2">
@@ -287,7 +473,11 @@ export default function Ingest() {
         disabled={loading || isVoiceTab}
         className="mt-4 bg-[#8B7CF6] text-white px-6 py-2 rounded-lg text-sm hover:bg-[#7C6DE0] transition-colors disabled:opacity-40"
       >
-        {loading ? "Processing..." : "Add to Brain →"}
+        {loading
+          ? isImageTab
+            ? "Describing images…"
+            : "Processing..."
+          : "Add to Brain →"}
       </button>
       {isVoiceTab && (
         <p className="mt-2 text-[10px] text-[#555]">

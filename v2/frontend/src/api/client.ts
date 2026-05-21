@@ -122,6 +122,27 @@ export const api = {
     }>;
   },
 
+  ingestImages: async (
+    images: string[],
+    options?: { title?: string; tags?: string[] },
+  ) => {
+    const res = await fetch(`${BASE}/ingest/images`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        images,
+        title: options?.title?.trim() || undefined,
+        tags: options?.tags,
+      }),
+    });
+    await ensureOk(res);
+    return res.json() as Promise<{
+      noteId: string;
+      chunkCount: number;
+      title: string;
+    }>;
+  },
+
   /** Multipart field name must be `audio` (matches backend FileInterceptor). */
   ingestVoice: async (audioBlob: Blob, title?: string) => {
     const form = new FormData();

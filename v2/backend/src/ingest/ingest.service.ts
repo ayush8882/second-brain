@@ -18,7 +18,13 @@ import type { UpsertVectorPoint } from '../vector/vector.types';
 import { createReadStream } from 'node:fs';
 import Anthropic from '@anthropic-ai/sdk';
 import { DeepgramClient } from '@deepgram/sdk';
-import { ConnectionAgent } from 'src/agents/connection.agent';
+import { ConnectionAgent } from '../agents/connection.agent';
+import {
+  normalizeImageInputs,
+  summarizeImageSources,
+} from './image-input';
+import type { ImageBlockParam } from '@anthropic-ai/sdk/resources/messages';
+import type { TextBlockParam } from '@anthropic-ai/sdk/resources/messages';
 
 @Injectable()
 export class IngestService {
@@ -107,6 +113,39 @@ export class IngestService {
         'voice',
         filePath.trim(),
         tags ?? [],
+      );
+    } catch (e) {
+      this.rethrowIngestError(e);
+    }
+  }
+
+  /**
+   * Vision ingest: each item may be an HTTP(S) image URL, a data URI
+   * (`data:image/png;base64,...`), or raw base64 (JPEG/PNG/GIF/WebP).
+   */
+  async ingestImages(body: {
+    title?: string;
+    images: string[];
+    tags?: string[];
+  }) {
+    const images = body.images?.map((i) => i.trim()).filter(Boolean) ?? [];
+    if (images.length === 0) {
+      throw new BadRequestException('images are required');
+    }
+    try {
+      const text = await this.describeImages(images);
+      let title = body.title?.trim() ?? '';
+      if (!title) {
+        title = config.anthropicKey
+          ? await this.generateImageTitle(text)
+          : text.trim().slice(0, 80) || 'Image note';
+      }
+      return this.processAndStore(
+        title,
+        text,
+        'image',
+        summarizeImageSources(images),
+        body.tags ?? [],
       );
     } catch (e) {
       this.rethrowIngestError(e);
@@ -246,6 +285,76 @@ export class IngestService {
     if (block?.type !== 'text') {
       throw new UnprocessableEntityException(
         'Could not generate a title from the transcript.',
+      );
+    }
+    return block.text.trim();
+  }
+
+  private async describeImages(images: string[]): Promise<string> {
+    if (!config.anthropicKey) {
+      throw new ServiceUnavailableException(
+        'ANTHROPIC_API_KEY is not set; cannot process images.',
+      );
+    }
+
+    const imageBlocks = normalizeImageInputs(images);
+    const claude = new Anthropic({ apiKey: config.anthropicKey });
+    const count = imageBlocks.length;
+
+    const prompt: TextBlockParam = {
+      type: 'text',
+      text:
+        count === 1
+          ? `Describe this image in detail for a personal knowledge base. Include: main subjects, visible text (transcribe accurately), UI elements, diagrams, colors, layout, and any facts or data shown. Write dense, search-friendly prose.`
+          : `You are given ${count} images, in order (Image 1 through Image ${count}). For each image, write a detailed section headed "## Image N" covering: main subjects, all visible text (transcribe accurately), UI/diagrams, colors, layout, and facts shown. Separate sections with a blank line. Write dense, search-friendly prose.`,
+    };
+
+    const content: Array<TextBlockParam | ImageBlockParam> = [
+      prompt,
+      ...imageBlocks,
+    ];
+
+    const res = await claude.messages.create({
+      model: config.models.chat,
+      max_tokens: 4096,
+      temperature: 0,
+      messages: [{ role: 'user', content }],
+    });
+
+    const block = res.content.find((b) => b.type === 'text');
+    if (!block || block.type !== 'text') {
+      throw new UnprocessableEntityException(
+        'Could not generate a description for the image(s).',
+      );
+    }
+    const text = block.text.trim();
+    if (!text) {
+      throw new UnprocessableEntityException(
+        'Image description was empty; try a clearer image or different format.',
+      );
+    }
+    return text;
+  }
+
+  private async generateImageTitle(description: string): Promise<string> {
+    if (!config.anthropicKey) {
+      throw new ServiceUnavailableException(
+        'ANTHROPIC_API_KEY is not set; cannot generate title.',
+      );
+    }
+    const claude = new Anthropic({ apiKey: config.anthropicKey });
+    const res = await claude.messages.create({
+      model: config.models.agent,
+      max_tokens: 20,
+      temperature: 0,
+      system:
+        'Generate a short 4-6 word title for this image note based on the description. Output the title only. No quotes.',
+      messages: [{ role: 'user', content: description.slice(0, 500) }],
+    });
+    const block = res.content[0];
+    if (block?.type !== 'text') {
+      throw new UnprocessableEntityException(
+        'Could not generate a title from the image description.',
       );
     }
     return block.text.trim();
