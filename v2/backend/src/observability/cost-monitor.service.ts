@@ -14,10 +14,10 @@ export class CostMonitorService {
 
   private readonly limits = {
     perRequestWarn: 0.05,
-    perUserDayWarn: 1.0,
-    perUserDayBlock: 5.0,
-    globalDayWarn: 50.0,
-    globalDayAlert: 100.0,
+    perUserDayWarn: 1,
+    perUserDayBlock: 5,
+    globalDayWarn: 50,
+    globalDayAlert: 100,
   };
 
   constructor(@Inject(REDIS_CLIENT) private readonly redis: RedisClient) {}
@@ -41,7 +41,7 @@ export class CostMonitorService {
       );
     }
 
-    const userMicro = parseInt(
+    const userMicro = Number.parseInt(
       (await this.redis.get(`cost:user:${userId}:${today}`)) || '0',
       10,
     );
@@ -79,7 +79,7 @@ export class CostMonitorService {
       await this.redis.incrby(`model_usage:${model}:${today}`, tokens);
     }
 
-    const globalMicro = parseInt(
+    const globalMicro = Number.parseInt(
       (await this.redis.get(`cost:global:${today}`)) || '0',
       10,
     );
@@ -93,7 +93,7 @@ export class CostMonitorService {
 
   async getDailyReport() {
     const today = new Date().toISOString().split('T')[0];
-    const globalMicro = parseInt(
+    const globalMicro = Number.parseInt(
       (await this.redis.get(`cost:global:${today}`)) || '0',
       10,
     );
@@ -114,17 +114,65 @@ export class CostMonitorService {
     };
   }
 
+  async getStats(userId?: string) {
+    const today = new Date().toISOString().split('T')[0];
+    const totalMicro = Number.parseInt(
+      (await this.redis.get(`cost:global:${today}`)) || '0',
+      10,
+    );
+    const totalTokens = Number.parseInt(
+      (await this.redis.get(`tokens:global:${today}`)) || '0',
+      10,
+    );
+    const requests = Number.parseInt(
+      (await this.redis.get(`requests:total:${today}`)) || '0',
+      10,
+    );
+
+    const byModel = await Promise.all(
+      Object.entries(MODEL_COST_PER_TOKEN).map(async ([model, rate]) => {
+        const tokens = Number.parseInt(
+          (await this.redis.get(`model_usage:${model}:${today}`)) || '0',
+          10,
+        );
+        return {
+          model,
+          cost: Number.parseFloat((tokens * rate).toFixed(4)),
+          requests: 0,
+          tokens,
+        };
+      }),
+    );
+
+    return {
+      total: {
+        total: Number.parseFloat((totalMicro / 1_000_000).toFixed(4)),
+        requests,
+        tokens: totalTokens,
+        userId: userId?.trim() || 'anonymous',
+      },
+      daily: [
+        {
+          date: today,
+          cost: Number.parseFloat((totalMicro / 1_000_000).toFixed(4)),
+          requests,
+        },
+      ],
+      byModel,
+    };
+  }
+
   async incrementCounter(key: string) {
     await this.redis.incr(key);
     await this.redis.expireat(key, this.tomorrowMidnight());
   }
 
   private async calculateNoContextRate(date: string) {
-    const noContext = parseInt(
+    const noContext = Number.parseInt(
       (await this.redis.get(`no_context:${date}`)) || '0',
       10,
     );
-    const total = parseInt(
+    const total = Number.parseInt(
       (await this.redis.get(`requests:total:${date}`)) || '1',
       10,
     );
@@ -132,11 +180,11 @@ export class CostMonitorService {
   }
 
   private async calculateErrorRate(date: string) {
-    const errors = parseInt(
+    const errors = Number.parseInt(
       (await this.redis.get(`errors:total:${date}`)) || '0',
       10,
     );
-    const total = parseInt(
+    const total = Number.parseInt(
       (await this.redis.get(`requests:total:${date}`)) || '1',
       10,
     );

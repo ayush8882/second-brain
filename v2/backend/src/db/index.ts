@@ -141,6 +141,10 @@ export function getAllNotes(): NoteRow[] {
   return selectAllNotes.all() as NoteRow[];
 }
 
+export function getRecentNotes(limit: number): NoteRow[] {
+  return selectAllNotes.all().slice(0, limit) as NoteRow[];
+}
+
 export function getNotesCount(): number {
   const row = countNotes.get() as { count: number } | undefined;
   return row?.count ?? 0;

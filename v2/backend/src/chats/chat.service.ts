@@ -15,6 +15,7 @@ import { RateLimiterService } from '../observability/rate-limiter.service';
 import { recordAiUsage } from '../observability/record-ai-usage';
 import { config } from '../config/config';
 import { voyageEmbedOne } from '../embed/voyage-embed.util';
+import { detectPII, sanitiseInput } from '../security/sanitise';
 import type { VectorSearchHit } from '../vector/vector.types';
 
 @Injectable()
@@ -37,6 +38,58 @@ export class ChatService {
       : null;
   }
 
+  private prepareQuestion(question: string, userId: string) {
+    const safeQuestion = sanitiseInput(question);
+    const piiFound = detectPII(safeQuestion);
+    if (piiFound.length > 0) {
+      this.logger.warn(
+        `[SECURITY] PII detected in query from ${userId}: ${piiFound.join(', ')}`,
+      );
+    }
+    return safeQuestion;
+  }
+
+  private async validateRequest(
+    sessionId: string,
+    question: string,
+    rateLimitUserId: string,
+    subject: Subject<MessageEvent>,
+    errPayload: (message: string) => string,
+  ) {
+    if (!sessionId?.trim() || !question?.trim()) {
+      this.logger.warn('Ask rejected: sessionId and question are required');
+      subject.next({ data: errPayload('sessionId and question are required') });
+      subject.complete();
+      return false;
+    }
+
+    if (!this.claude) {
+      this.logger.warn('Ask rejected: ANTHROPIC_API_KEY is not set');
+      subject.next({ data: errPayload('ANTHROPIC_API_KEY is not set') });
+      subject.complete();
+      return false;
+    }
+
+    if (!this.voyage) {
+      this.logger.warn('Ask rejected: VOYAGE_API_KEY is not set');
+      subject.next({ data: errPayload('VOYAGE_API_KEY is not set') });
+      subject.complete();
+      return false;
+    }
+
+    try {
+      await this.rateLimiter.check(rateLimitUserId);
+      return true;
+    } catch (err) {
+      if (err instanceof RateLimitError) {
+        subject.next({ data: errPayload(err.message) });
+        subject.complete();
+        return false;
+      }
+      throw err;
+    }
+  }
+
   async ask(
     sessionId: string,
     question: string,
@@ -49,47 +102,27 @@ export class ChatService {
     const startTime = Date.now();
 
     try {
-      if (!sessionId?.trim() || !question?.trim()) {
-        this.logger.warn(
-          'Ask rejected: sessionId and question are required',
-        );
-        subject.next({
-          data: errPayload('sessionId and question are required'),
-        });
-        subject.complete();
+      question = this.prepareQuestion(question, rateLimitUserId);
+
+      if (
+        !(await this.validateRequest(
+          sessionId,
+          question,
+          rateLimitUserId,
+          subject,
+          errPayload,
+        ))
+      ) {
         return;
       }
 
-      if (!this.claude) {
-        this.logger.warn('Ask rejected: ANTHROPIC_API_KEY is not set');
-        subject.next({
-          data: errPayload('ANTHROPIC_API_KEY is not set'),
-        });
-        subject.complete();
+      const voyage = this.voyage;
+      const claude = this.claude;
+      if (!voyage || !claude) {
         return;
       }
 
-      if (!this.voyage) {
-        this.logger.warn('Ask rejected: VOYAGE_API_KEY is not set');
-        subject.next({
-          data: errPayload('VOYAGE_API_KEY is not set'),
-        });
-        subject.complete();
-        return;
-      }
-
-      try {
-        await this.rateLimiter.check(rateLimitUserId);
-      } catch (err) {
-        if (err instanceof RateLimitError) {
-          subject.next({ data: errPayload(err.message) });
-          subject.complete();
-          return;
-        }
-        throw err;
-      }
-
-      const queryVector = await voyageEmbedOne(this.voyage, question.trim());
+      const queryVector = await voyageEmbedOne(voyage, question.trim());
       if (queryVector.length !== config.vectorSize) {
         throw new ServiceUnavailableException(
           `Embedding dimension mismatch: expected ${config.vectorSize}, got ${queryVector.length}.`,
@@ -134,7 +167,7 @@ export class ChatService {
 
       let fullAnswer = '';
 
-      const stream = this.claude.messages.stream({
+      const stream = claude.messages.stream({
         model: config.models.chat,
         max_tokens: 1024,
         system: `You are a personal knowledge assistant.
@@ -188,7 +221,10 @@ ${context}`,
     } catch (err) {
       const message =
         err instanceof Error ? err.message : 'Chat request failed';
-      this.logger.error(`Ask failed: ${message}`, err instanceof Error ? err.stack : undefined);
+      this.logger.error(
+        `Ask failed: ${message}`,
+        err instanceof Error ? err.stack : undefined,
+      );
       subject.next({
         data: errPayload(message),
       });
