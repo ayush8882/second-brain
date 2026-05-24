@@ -9,6 +9,10 @@ import Anthropic from '@anthropic-ai/sdk';
 import { VoyageAIClient } from 'voyageai';
 import { VectorService } from '../vector/vector.service';
 import { MemoryService } from '../memory/memory.service';
+import { CostMonitorService } from '../observability/cost-monitor.service';
+import { RateLimitError } from '../observability/rate-limit.error';
+import { RateLimiterService } from '../observability/rate-limiter.service';
+import { recordAiUsage } from '../observability/record-ai-usage';
 import { config } from '../config/config';
 import { voyageEmbedOne } from '../embed/voyage-embed.util';
 import type { VectorSearchHit } from '../vector/vector.types';
@@ -22,6 +26,8 @@ export class ChatService {
   constructor(
     private readonly vector: VectorService,
     private readonly memory: MemoryService,
+    private readonly rateLimiter: RateLimiterService,
+    private readonly costMonitor: CostMonitorService,
   ) {
     this.claude = config.anthropicKey
       ? new Anthropic({ apiKey: config.anthropicKey })
@@ -35,9 +41,12 @@ export class ChatService {
     sessionId: string,
     question: string,
     subject: Subject<MessageEvent>,
+    userId?: string,
   ): Promise<void> {
     const errPayload = (message: string) =>
       JSON.stringify({ type: 'error', message });
+    const rateLimitUserId = userId?.trim() || sessionId.trim() || 'anonymous';
+    const startTime = Date.now();
 
     try {
       if (!sessionId?.trim() || !question?.trim()) {
@@ -67,6 +76,17 @@ export class ChatService {
         });
         subject.complete();
         return;
+      }
+
+      try {
+        await this.rateLimiter.check(rateLimitUserId);
+      } catch (err) {
+        if (err instanceof RateLimitError) {
+          subject.next({ data: errPayload(err.message) });
+          subject.complete();
+          return;
+        }
+        throw err;
       }
 
       const queryVector = await voyageEmbedOne(this.voyage, question.trim());
@@ -144,11 +164,23 @@ ${context}`,
       this.logger.log(
         `Ask completed: input_tokens=${final.usage.input_tokens} output_tokens=${final.usage.output_tokens}`,
       );
+
       subject.next({
         data: JSON.stringify({
           type: 'done',
           usage: final.usage,
         }),
+      });
+
+      void recordAiUsage(this.rateLimiter, this.costMonitor, {
+        userId: rateLimitUserId,
+        model: config.models.chat,
+        usage: final.usage,
+        latencyMs: Date.now() - startTime,
+      }).catch((recordErr) => {
+        this.logger.warn(
+          `Observability record failed: ${recordErr instanceof Error ? recordErr.message : recordErr}`,
+        );
       });
 
       this.memory.saveTurn(sessionId, question.trim(), fullAnswer);
