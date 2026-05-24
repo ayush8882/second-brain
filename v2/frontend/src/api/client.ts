@@ -33,10 +33,15 @@ export const api = {
   },
 
   getStats: async () => {
-    const res = await fetch(`${BASE}/notes/stats`);
+    const res = await fetch(`${BASE}/stats`);
     await ensureOk(res);
-    const data = (await res.json()) as { count: number };
-    return { total: data.count };
+    return res.json();
+  },
+
+  runEvals: async () => {
+    const res = await fetch(`${BASE}/evals/run`);
+    await ensureOk(res);
+    return res.json();
   },
 
   deleteNote: async (id: string) => {

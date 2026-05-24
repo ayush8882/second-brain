@@ -16,6 +16,6 @@ import { VectorService } from './vector.service';
     },
     VectorService,
   ],
-  exports: [VectorService],
+  exports: [VectorService, QdrantClient],
 })
 export class VectorModule {}
